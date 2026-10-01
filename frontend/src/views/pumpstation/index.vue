@@ -32,25 +32,31 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>可执行动作</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+            <template v-if="nextAction(row.status)">
+              <button
+                class="link"
+                type="button"
+                :disabled="submittingId === row.id"
+                @click="runAction(nextAction(row.status), row)"
+              >
+                {{ submittingId === row.id ? '提交中…' : nextAction(row.status) }}
+              </button>
+            </template>
+            <span v-else class="muted-text">已办结</span>
+          </td>
+          <td class="row-actions">
+            <RouterLink class="link" :to="`/pumpstation/${row.id}`">查看详情</RouterLink>
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 1" class="empty-state">暂无泵站设施数据，可先登记泵站</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无泵站设施数据，可先登记泵站</td>
         </tr>
       </tbody>
     </table>
@@ -68,18 +74,34 @@ import { onMounted, ref } from 'vue'
 import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type HistoryRecord = { action: string; from: string; to: string; time: string }
+type DetailRow = Row & { history?: HistoryRecord[] }
 
 const ENDPOINT = '/api/pumpstation'
 const columns = ["泵站编号", "泵站名称", "服务区域", "装机台数", "设计流量", "上次检修日", "值守方式", "泵站状态"]
-const actions = ["办理接管", "标记减量", "安排检修"]
-const statuses = ["待接管", "运行正常", "减量运行", "停运检修"]
-const stats = [{"label": "在运泵站", "value": 0}, {"label": "减量运行泵站", "value": 0}, {"label": "停运检修泵站", "value": 0}]
+// 状态顺序与后端口径保持一致：每个状态只有一个合法的下一步动作。
+const nextActionByStatus: Record<string, string> = {
+  '待接管': '办理接管',
+  '运行正常': '标记减量',
+  '减量运行': '安排检修',
+}
+const stats = ref([
+  { label: '在运泵站', value: 0 },
+  { label: '减量运行泵站', value: 0 },
+  { label: '停运检修泵站', value: 0 },
+])
 
-const rows = ref<Row[]>([])
+const rows = ref<DetailRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+// 记录正在提交的行，同一台泵站的动作在返回前不能点第二次。
+const submittingId = ref<number | null>(null)
+
+function nextAction(status: unknown): string {
+  return nextActionByStatus[String(status)] ?? ''
+}
 
 function resetFilters() {
   filters.value = {}
@@ -95,18 +117,26 @@ function openCreate() {
 }
 
 async function runAction(action: string, row: Row) {
+  if (submittingId.value !== null) {
+    return
+  }
   errorMessage.value = ''
+  submittingId.value = Number(row.id)
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
       body: JSON.stringify({ action }),
     })
-    if (!response.ok) {
-      throw new Error('泵站设施动作未生效，请稍后重试')
+    const payload = await response.json().catch(() => null)
+    // 业务是否被接受由服务端 ok 决定，被拦下（重复/越序）时原样展示服务端原因。
+    if (!response.ok || !payload || payload.ok === false) {
+      throw new Error(payload?.message ?? '泵站设施动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '泵站设施操作失败'
+  } finally {
+    submittingId.value = null
   }
 }
 
@@ -114,13 +144,26 @@ async function reload() {
   errorMessage.value = ''
   const query = new URLSearchParams(filters.value as Record<string, string>).toString()
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
-    if (!response.ok) {
+    // 统计卡片要反映全量口径（不受筛选影响），单独取一页足够大的数据。
+    const [listResponse, statsResponse] = await Promise.all([
+      request(`${ENDPOINT}?${query}`),
+      request(`${ENDPOINT}?page=1&size=200`),
+    ])
+    if (!listResponse.ok) {
       throw new Error('泵站列表读取失败')
     }
-    const payload = await response.json()
+    const payload = await listResponse.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    if (statsResponse.ok) {
+      const all = await statsResponse.json()
+      const allRows: Row[] = all.items ?? []
+      stats.value = [
+        { label: '在运泵站', value: allRows.filter((item) => item['泵站状态'] === '运行正常').length },
+        { label: '减量运行泵站', value: allRows.filter((item) => item['泵站状态'] === '减量运行').length },
+        { label: '停运检修泵站', value: allRows.filter((item) => item['泵站状态'] === '停运检修').length },
+      ]
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '泵站设施列表读取失败'
   }

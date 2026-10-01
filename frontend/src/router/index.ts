@@ -5,6 +5,7 @@ const Pipe = () => import('@/views/pipe/index.vue')
 const Manhole = () => import('@/views/manhole/index.vue')
 const Valve = () => import('@/views/valve/index.vue')
 const Pumpstation = () => import('@/views/pumpstation/index.vue')
+const PumpstationDetail = () => import('@/views/pumpstation/detail.vue')
 const Patrol = () => import('@/views/patrol/index.vue')
 const Defect = () => import('@/views/defect/index.vue')
 const Cctv = () => import('@/views/cctv/index.vue')
@@ -28,6 +29,7 @@ const router = createRouter({
     { path: '/manhole', name: 'manhole', component: Manhole },
     { path: '/valve', name: 'valve', component: Valve },
     { path: '/pumpstation', name: 'pumpstation', component: Pumpstation },
+    { path: '/pumpstation/:id', name: 'pumpstation-detail', component: PumpstationDetail },
     { path: '/patrol', name: 'patrol', component: Patrol },
     { path: '/defect', name: 'defect', component: Defect },
     { path: '/cctv', name: 'cctv', component: Cctv },
